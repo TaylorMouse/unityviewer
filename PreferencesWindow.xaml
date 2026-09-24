@@ -1,0 +1,54 @@
+<Window x:Class="UnityBrowser.PreferencesWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Export Preferences" Width="560" SizeToContent="Height"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <StackPanel Margin="16">
+        <TextBlock Text="Default export location" FontWeight="SemiBold" Margin="0,0,0,6" />
+        <DockPanel>
+            <Button DockPanel.Dock="Right" Content="Browse..." Padding="12,3" Margin="6,0,0,0" Click="Browse_Click" />
+            <TextBox x:Name="ExportFolderBox" VerticalContentAlignment="Center" Padding="4,3" />
+        </DockPanel>
+        <TextBlock Text="Exported files are written here. Leave empty to be asked each time."
+                   Foreground="Gray" Margin="0,6,0,0" TextWrapping="Wrap" />
+
+        <TextBlock Text="Export All Known Formats" FontWeight="SemiBold" Margin="0,20,0,8" />
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="200" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0" Text="Mesh export" VerticalAlignment="Center" Margin="0,0,16,6" />
+            <ComboBox x:Name="MeshFormatBox" Grid.Row="0" Grid.Column="1" Margin="0,0,0,6">
+                <ComboBoxItem Content="DAE (COLLADA)" Tag="Dae" />
+                <ComboBoxItem Content="OBJ" Tag="Obj" />
+            </ComboBox>
+
+            <TextBlock Grid.Row="1" Text="Image format" VerticalAlignment="Center" Margin="0,0,16,6" />
+            <ComboBox x:Name="ImageFormatBox" Grid.Row="1" Grid.Column="1" Margin="0,0,0,6">
+                <ComboBoxItem Content="PNG" Tag="Png" />
+                <ComboBoxItem Content="DDS" Tag="Dds" />
+            </ComboBox>
+
+            <CheckBox x:Name="ExportAnimationsBox" Grid.Row="2" Grid.ColumnSpan="3" Margin="0,4,0,6"
+                      Content="Export animation clips (DAE, character animations only)" />
+            <CheckBox x:Name="ExportSoundBox" Grid.Row="3" Grid.ColumnSpan="3" Margin="0,0,0,0"
+                      Content="Export sound (WAV)" />
+        </Grid>
+        <TextBlock Text="Textures and sprites, meshes, and (if ticked) animation clips and sound are exported from everything under the selected nodes, including subfolders. Each source file gets its own subfolder."
+                   Foreground="Gray" Margin="0,8,0,0" TextWrapping="Wrap" />
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+            <Button Content="OK" Width="80" Padding="0,3" IsDefault="True" Click="Ok_Click" />
+            <Button Content="Cancel" Width="80" Padding="0,3" Margin="8,0,0,0" IsCancel="True" />
+        </StackPanel>
+    </StackPanel>
+</Window>

@@ -3,4 +3,12 @@
 test exports/
 Test Exports/
 
+# Game asset files (not ours to publish)
 *.unity3d
+*.bundle
+*.assets
+*.resS
+*.resource
+
+.vs/
+*.user
