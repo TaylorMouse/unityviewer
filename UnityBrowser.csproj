@@ -17,5 +17,7 @@
     <PackageReference Include="BCnEncoder.Net" Version="2.1.0" />
     <PackageReference Include="LZMA-SDK" Version="22.1.1" />
     <PackageReference Include="NVorbis" Version="0.10.5" />
+    <PackageReference Include="Kyaru.Texture2DDecoder" Version="0.17.1" />
+    <PackageReference Include="Kyaru.Texture2DDecoder.Windows" Version="0.2.0" />
   </ItemGroup>
 </Project>

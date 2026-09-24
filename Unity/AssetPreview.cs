@@ -12,6 +12,8 @@ public sealed class TextureData
     public int ColorSpace { get; init; }
     public byte[] Data { get; init; } = Array.Empty<byte>();
     public string Source { get; init; } = "";
+    /// <summary>The stored format when it differs from <see cref="Format"/> (Crunch textures are unpacked on read).</summary>
+    public int? StoredFormat { get; init; }
 }
 
 /// <summary>Builds image previews for Texture2D and Sprite objects.</summary>
@@ -69,13 +71,26 @@ public static class AssetPreview
             throw new InvalidDataException("Texture has no image data.");
         }
 
+        int format = Convert.ToInt32(root["m_TextureFormat"]?.Value);
+        int mips = Math.Max(1, Convert.ToInt32(root["m_MipCount"]?.Value ?? 1));
+        int? stored = null;
+        if (TextureDecoder.IsCrunched(format))
+        {
+            // Crunch unpacks to the top mip level of a plain DXT/ETC texture.
+            data = TextureDecoder.Uncrunch(data, UnityVersionOf(sf));
+            stored = format;
+            format = TextureDecoder.CrunchBaseFormat(format);
+            mips = 1;
+        }
+
         return new TextureData
         {
             Name = root["m_Name"]?.Value as string ?? "",
             Width = width,
             Height = height,
-            Format = Convert.ToInt32(root["m_TextureFormat"]?.Value),
-            MipCount = Math.Max(1, Convert.ToInt32(root["m_MipCount"]?.Value ?? 1)),
+            Format = format,
+            StoredFormat = stored,
+            MipCount = mips,
             ImageCount = Math.Max(1, Convert.ToInt32(root["m_ImageCount"]?.Value ?? 1)),
             ColorSpace = root["m_ColorSpace"]?.Value is int cs ? cs : -1,
             Data = data,
@@ -100,7 +115,9 @@ public static class AssetPreview
             Bgra = TextureDecoder.Decode(t.Data, t.Format, t.Width, t.Height),
         };
         image.Info.Add(new("Dimensions", $"{t.Width} x {t.Height}"));
-        image.Info.Add(new("Format", $"{TextureDecoder.FormatName(t.Format)} ({t.Format})"));
+        image.Info.Add(new("Format", t.StoredFormat is { } sfmt
+            ? $"{TextureDecoder.FormatName(sfmt)} ({sfmt}), unpacked to {TextureDecoder.FormatName(t.Format)}"
+            : $"{TextureDecoder.FormatName(t.Format)} ({t.Format})"));
         image.Info.Add(new("Mip levels", t.MipCount.ToString()));
         if (t.ImageCount > 1) image.Info.Add(new("Images", $"{t.ImageCount} (showing the first)"));
         image.Info.Add(new("Pixel data", $"{TreeBuilderSize(t.Data.Length)} ({t.Source})"));
@@ -150,6 +167,13 @@ public static class AssetPreview
         foreach (var info in tex.Info.Where(i => i.Key is "Format" or "Dimensions"))
             image.Info.Add(new($"Texture {info.Key.ToLowerInvariant()}", info.Value));
         return image;
+    }
+
+    /// <summary>The Unity version a file was built with (from the file, or the bundle header if stripped).</summary>
+    public static string UnityVersionOf(SerializedFile sf)
+    {
+        if (!string.IsNullOrEmpty(sf.UnityVersion) && !sf.UnityVersion.StartsWith("0.")) return sf.UnityVersion;
+        return sf.Owner?.Bundle?.UnityRevision ?? "";
     }
 
     /// <summary>fileID 0 is the same file; others index the externals table (1-based).</summary>

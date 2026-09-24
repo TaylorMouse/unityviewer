@@ -48,11 +48,13 @@ public sealed class MeshData
     }
 }
 
-/// <summary>Reads Mesh objects (Unity 2019+ vertex layout, uncompressed meshes).</summary>
+/// <summary>
+/// Reads uncompressed Mesh objects. Handles the current 14-channel layout (Unity 2018+) and the older
+/// 8-channel layout (Unity 5 to 2017), converting the older vertex format enums to the current one.
+/// </summary>
 public static class MeshReader
 {
-    private const int ChannelPosition = 0, ChannelNormal = 1, ChannelColor = 3, ChannelUv0 = 4,
-        ChannelBlendWeight = 12, ChannelBlendIndices = 13;
+    private const int ChannelPosition = 0, ChannelNormal = 1;
 
     private sealed record Channel(int Stream, int Offset, int Format, int Dimension);
 
@@ -71,8 +73,19 @@ public static class MeshReader
         var channels = vd["m_Channels"]!.Children.Select(c => new Channel(
             Convert.ToInt32(c["stream"]?.Value), Convert.ToInt32(c["offset"]?.Value),
             Convert.ToInt32(c["format"]?.Value), Convert.ToInt32(c["dimension"]?.Value) & 0xF)).ToList();
-        if (channels.Count < 14)
-            throw new NotSupportedException($"Mesh vertex layout with {channels.Count} channels (pre Unity 2019) is not supported yet.");
+        // Channel order and format enum depend on the Unity version.
+        //   8 channels (Unity 5 to 2017): position, normal, colour, UV0-UV3, tangent; skin in m_Skin.
+        //   14 channels (2018+): position, normal, tangent, colour, UV0-UV7, blend weights, blend indices.
+        bool oldLayout = channels.Count == 8;
+        if (!oldLayout && channels.Count < 14)
+            throw new NotSupportedException($"Mesh vertex layout with {channels.Count} channels is not supported yet.");
+        int year = UnityYear(AssetPreview.UnityVersionOf(sf));
+        Func<int, int> toCurrentFormat = oldLayout
+            ? (year == 2017 ? From2017Format : FromPre2017Format)
+            : (year == 2018 ? From2017Format : f => f);
+        channels = channels.Select(c => c with { Format = toCurrentFormat(c.Format) }).ToList();
+        int ChannelColor = oldLayout ? 2 : 3, ChannelUv0 = oldLayout ? 3 : 4;
+        int ChannelBlendWeight = oldLayout ? -1 : 12, ChannelBlendIndices = oldLayout ? -1 : 13;
 
         byte[] vertexBytes = ReadVertexBytes(sf, root, vd);
 
@@ -148,10 +161,10 @@ public static class MeshReader
 
         var bindPoses = root["m_BindPose"]?.Children ?? new List<FieldValue>();
         int boneCount = bindPoses.Count;
-        var (boneIndices, boneWeights) = boneCount > 0
-            ? ReadSkin(ReadChannel(ChannelBlendWeight), channels[ChannelBlendWeight].Dimension,
-                       ReadChannel(ChannelBlendIndices), channels[ChannelBlendIndices].Dimension, vertexCount)
-            : (null, null);
+        var (boneIndices, boneWeights) = boneCount == 0 ? (null, null)
+            : oldLayout ? ReadLegacySkin(root["m_Skin"], vertexCount)
+            : ReadSkin(ReadChannel(ChannelBlendWeight), channels[ChannelBlendWeight].Dimension,
+                       ReadChannel(ChannelBlendIndices), channels[ChannelBlendIndices].Dimension, vertexCount);
         var mesh = new MeshData
         {
             Name = name,
@@ -213,6 +226,45 @@ public static class MeshReader
         }
         return mesh;
     }
+
+    /// <summary>Unity 5 to 2017: one BoneInfluence { weight[0..3], boneIndex[0..3] } per vertex in m_Skin.</summary>
+    private static (int[]?, float[]?) ReadLegacySkin(FieldValue? skin, int vertexCount)
+    {
+        var entries = skin?.Children;
+        if (entries == null || entries.Count != vertexCount) return (null, null);
+        var indices = new int[vertexCount * 4];
+        var weights = new float[vertexCount * 4];
+        for (int v = 0; v < vertexCount; v++)
+        {
+            float sum = 0;
+            for (int k = 0; k < 4; k++)
+            {
+                weights[v * 4 + k] = Convert.ToSingle(entries[v][$"weight[{k}]"]?.Value ?? 0f);
+                indices[v * 4 + k] = Convert.ToInt32(entries[v][$"boneIndex[{k}]"]?.Value ?? 0);
+                sum += weights[v * 4 + k];
+            }
+            if (sum > 0)
+                for (int k = 0; k < 4; k++) weights[v * 4 + k] /= sum;
+        }
+        return (indices, weights);
+    }
+
+    private static int UnityYear(string version) =>
+        int.TryParse(version.Split('.')[0], out int major) ? major : 0;
+
+    /// <summary>Unity 5 / 2016 VertexChannelFormat: Float, Float16, Color, Byte, UInt32.</summary>
+    private static int FromPre2017Format(int f) => f switch
+    {
+        0 => 0, 1 => 1, 2 => 2, 3 => 6, 4 => 10,
+        _ => throw new NotSupportedException($"Unknown vertex channel format {f}."),
+    };
+
+    /// <summary>Unity 2017 / 2018 VertexFormat: Float, Float16, Color, UNorm8, SNorm8, UNorm16, SNorm16, UInt8, SInt8, UInt16, SInt16, UInt32, SInt32.</summary>
+    private static int From2017Format(int f) => f switch
+    {
+        0 => 0, 1 => 1, 2 or 3 => 2, >= 4 and <= 12 => f - 1,
+        _ => throw new NotSupportedException($"Unknown vertex format {f}."),
+    };
 
     private static uint[] ReadHashes(SerializedFile sf, FieldValue? array)
     {

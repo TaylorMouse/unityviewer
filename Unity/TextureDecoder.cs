@@ -31,14 +31,67 @@ public static class TextureDecoder
         _ => $"Format {format}",
     };
 
+    public static bool IsCrunched(int format) => format is 28 or 29 or 64 or 65;
+
+    /// <summary>The block format a Crunch texture unpacks to.</summary>
+    public static int CrunchBaseFormat(int format) => format switch
+    {
+        28 => 10,  // DXT1Crunched -> DXT1
+        29 => 12,  // DXT5Crunched -> DXT5
+        64 => 34,  // ETC_RGB4Crunched -> ETC_RGB4
+        65 => 47,  // ETC2_RGBA8Crunched -> ETC2_RGBA8
+        _ => format,
+    };
+
+    /// <summary>
+    /// Unpacks a Crunch texture to its top mip level in the base block format. Unity switched to its own
+    /// Crunch variant in 2017.3; older files use the original crnlib format. When the version is unknown
+    /// (stripped), both are tried.
+    /// </summary>
+    public static byte[] Uncrunch(byte[] data, string unityVersion)
+    {
+        bool? unity = UsesUnityCrunch(unityVersion);
+        Func<byte[]?>[] attempts = unity switch
+        {
+            true => new Func<byte[]?>[] { () => Texture2DDecoder.TextureDecoder.UnpackUnityCrunch(data) },
+            false => new Func<byte[]?>[] { () => Texture2DDecoder.TextureDecoder.UnpackCrunch(data) },
+            null => new Func<byte[]?>[]
+            {
+                () => Texture2DDecoder.TextureDecoder.UnpackUnityCrunch(data),
+                () => Texture2DDecoder.TextureDecoder.UnpackCrunch(data),
+            },
+        };
+        foreach (var attempt in attempts)
+        {
+            try
+            {
+                var result = attempt();
+                if (result is { Length: > 0 }) return result;
+            }
+            catch
+            {
+                // Try the other variant.
+            }
+        }
+        throw new InvalidDataException("The Crunch data could not be unpacked.");
+    }
+
+    private static bool? UsesUnityCrunch(string version)
+    {
+        var parts = version.Split('.', 'a', 'b', 'f', 'p', 'x');
+        if (parts.Length < 2 || !int.TryParse(parts[0], out int major) || !int.TryParse(parts[1], out int minor) || major == 0)
+            return null;
+        return major > 2017 || (major == 2017 && minor >= 3);
+    }
+
     /// <summary>Bytes needed for the top mip level, or -1 if the format is unknown.</summary>
     public static long Mip0Size(int format, int w, int h)
     {
         long blocks = (long)((w + 3) / 4) * ((h + 3) / 4);
         return format switch
         {
-            10 or 26 => blocks * 8,
-            11 or 12 or 24 or 25 or 27 => blocks * 16,
+            10 or 26 or 34 or 45 => blocks * 8,
+            11 or 12 or 24 or 25 or 27 or 47 => blocks * 16,
             1 or 63 => (long)w * h,
             2 or 7 or 9 or 13 or 15 or 62 => (long)w * h * 2,
             3 => (long)w * h * 3,
@@ -67,10 +120,24 @@ public static class TextureDecoder
             27 => Bcn(data, need, w, h, CompressionFormat.Bc5),
             25 => Bcn(data, need, w, h, CompressionFormat.Bc7),
             24 => Bc6(data, need, w, h),
+            34 => Native(data, w, h, Texture2DDecoder.TextureDecoder.DecodeETC1),
+            45 => Native(data, w, h, Texture2DDecoder.TextureDecoder.DecodeETC2),
+            47 => Native(data, w, h, Texture2DDecoder.TextureDecoder.DecodeETC2A8),
             _ => DecodeUncompressed(data, format, w, h),
         };
 
         return FlipToBgra(rgba, w, h);
+    }
+
+    private delegate bool NativeDecoder(ReadOnlySpan<byte> data, int width, int height, Span<byte> image);
+
+    /// <summary>Texture2DDecoder output is BGRA in Unity's row order; convert to RGBA for the shared flip.</summary>
+    private static byte[] Native(byte[] data, int w, int h, NativeDecoder decode)
+    {
+        var bgra = new byte[w * h * 4];
+        if (!decode(data, w, h, bgra)) throw new InvalidDataException("Texture data could not be decoded.");
+        for (int i = 0; i < bgra.Length; i += 4) (bgra[i], bgra[i + 2]) = (bgra[i + 2], bgra[i]);
+        return bgra;
     }
 
     private static byte[] Bcn(byte[] data, long size, int w, int h, CompressionFormat fmt)
