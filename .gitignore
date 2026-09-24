@@ -1,0 +1,6 @@
+[Bb]in/
+[Oo]bj/
+test exports/
+Test Exports/
+
+*.unity3d
