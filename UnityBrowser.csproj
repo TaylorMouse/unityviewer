@@ -8,6 +8,9 @@
     <AssemblyName>UnityBrowser</AssemblyName>
     <RootNamespace>UnityBrowser</RootNamespace>
     <ApplicationIcon>app.ico</ApplicationIcon>
+    <Version>1.0.0</Version>
+    <Product>Unity Browser</Product>
+    <Authors>TaylorMouse</Authors>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="app.ico" />

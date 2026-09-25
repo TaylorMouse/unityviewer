@@ -36,12 +36,25 @@ public partial class MainWindow : Window
     {
         AppSettings.Load();
         InitializeComponent();
+        var version = typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 0, 0);
+        Title = $"Unity Viewer by Taylor Mouse (v{version.Major}.{version.Minor}.{version.Build})";
         InitAudio();
         Tree.ItemsSource = _roots;
         TypesTree.ItemsSource = _typeRoots;
 
         var args = Environment.GetCommandLineArgs();
-        if (args.Length > 1) Loaded += (_, _) => OpenPath(args[1]);
+        if (args.Length > 1)
+            Loaded += (_, _) =>
+            {
+                try
+                {
+                    OpenPath(args[1]);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, $"Could not open {args[1]}:\n{ex}", "Unity Viewer", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            };
     }
 
     private void OpenFile_Click(object sender, RoutedEventArgs e) => ShowOpenFile();
@@ -173,6 +186,7 @@ public partial class MainWindow : Window
     {
         if (Directory.Exists(path)) OpenFolder(path);
         else if (File.Exists(path)) OpenFile(path);
+        else StatusText.Text = $"Not found: {path}";
     }
 
     private void OpenFile(string path)
