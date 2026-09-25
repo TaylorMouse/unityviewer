@@ -5,6 +5,16 @@ A Windows (WPF, .NET 10) browser for Unity asset bundles (`.unity3d`, `.bundle`,
 parser for the UnityFS container and serialised files, so it works even when a game strips the Unity version
 from its bundles.
 
+## Screenshots
+
+An animation playing on its character, from the Types tab (all animations across the open files):
+
+![Animation playback in the Types tab](screen-001.jpg)
+
+A texture preview in the Files tab, with the bundle's contents in the tree:
+
+![Texture preview in the Files tab](screen-002.jpg)
+
 ## Features
 
 - **Browse** a file or a whole folder (including subfolders) in a tree: bundle entries, types and named objects.
