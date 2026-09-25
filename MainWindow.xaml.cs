@@ -38,6 +38,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         InitAudio();
         Tree.ItemsSource = _roots;
+        TypesTree.ItemsSource = _typeRoots;
 
         var args = Environment.GetCommandLineArgs();
         if (args.Length > 1) Loaded += (_, _) => OpenPath(args[1]);
@@ -50,6 +51,7 @@ public partial class MainWindow : Window
     private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         StopAudio();
+        StopAnimation();
         CleanAudioTemp();
         AppSettings.Save();
     }
@@ -68,13 +70,15 @@ public partial class MainWindow : Window
     {
         ClearSelection();
         _roots.Clear();
+        FileRegistry.Clear();
+        ClearTypes();
         ShowProperties(null);
         StatusText.Text = "Closed.";
     }
 
     private void CollapseAll_Click(object sender, RoutedEventArgs e)
     {
-        foreach (var root in _roots) Collapse(root);
+        foreach (var root in _roots.Concat(_typeRoots)) Collapse(root);
     }
 
     private static void Collapse(TreeNode node)
@@ -85,12 +89,20 @@ public partial class MainWindow : Window
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None &&
-            AudioPanel.Visibility == Visibility.Visible && Keyboard.FocusedElement is not TextBox)
+        if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None && Keyboard.FocusedElement is not TextBox)
         {
-            TogglePlayPause();
-            e.Handled = true;
-            return;
+            if (AudioPanel.Visibility == Visibility.Visible)
+            {
+                TogglePlayPause();
+                e.Handled = true;
+                return;
+            }
+            if (AnimationBar.Visibility == Visibility.Visible)
+            {
+                ToggleAnimation();
+                e.Handled = true;
+                return;
+            }
         }
 
         if (e.Key == Key.O && Keyboard.Modifiers == ModifierKeys.Control)
@@ -111,6 +123,16 @@ public partial class MainWindow : Window
         else if (e.Key == Key.E && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
         {
             _ = ExportSelectedAsync(ExportFormat.Dds);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.D && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            _ = FindDependenciesAsync(chooseFolder: false);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.R && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+        {
+            _ = ExportRawAsync();
             e.Handled = true;
         }
         else if (e.Key == Key.A && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
@@ -157,6 +179,9 @@ public partial class MainWindow : Window
     {
         ClearSelection();
         _roots.Clear();
+        FileRegistry.Clear();
+        ClearTypes();
+        LeftTabs.SelectedIndex = 0;
         ShowProperties(null);
         var node = CreateFileNode(path, Path.GetFileName(path));
         _roots.Add(node);
@@ -168,6 +193,9 @@ public partial class MainWindow : Window
     {
         ClearSelection();
         _roots.Clear();
+        FileRegistry.Clear();
+        ClearTypes();
+        LeftTabs.SelectedIndex = 0;
         ShowProperties(null);
 
         var files = FolderPatterns
@@ -218,6 +246,7 @@ public partial class MainWindow : Window
             });
 
             node.Model = file;
+            FileRegistry.Register(file);
             TreeBuilder.DescribeFile(node, file);
             node.Children = new ObservableCollection<TreeNode>(children);
 
@@ -238,11 +267,12 @@ public partial class MainWindow : Window
             StatusText.Text = $"Failed to load {Path.GetFileName(path)}: {ex.Message}";
         }
 
-        if (node.IsSelected) ShowProperties(node);
+        if (node.IsSelected && ActiveTree == Tree) ShowProperties(node);
     }
 
     private void Tree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
+        if (!ReferenceEquals(sender, ActiveTree)) return; // e.g. a file in the hidden tab finished loading
         var node = e.NewValue as TreeNode;
         if (!_keepSelectionOnFocusChange && node != null) SetSelection(node);
         ShowProperties(node);
@@ -282,7 +312,7 @@ public partial class MainWindow : Window
             foreach (var n in _selection) n.IsMultiSelected = false;
             _selection.Clear();
         }
-        var visible = VisibleNodes(_roots).ToList();
+        var visible = VisibleNodes(ActiveRoots).ToList();
         int a = visible.IndexOf(anchor), b = visible.IndexOf(node);
         var range = a < 0 || b < 0 ? [node] : visible.GetRange(Math.Min(a, b), Math.Abs(a - b) + 1);
         foreach (var n in range)
@@ -384,7 +414,7 @@ public partial class MainWindow : Window
         if (_exporting) return;
 
         var roots = _selection.Count > 0 ? _selection.ToList()
-            : Tree.SelectedItem is TreeNode focused ? [focused] : new List<TreeNode>();
+            : ActiveTree.SelectedItem is TreeNode focused ? [focused] : new List<TreeNode>();
 
         // Gather on the UI thread (the tree is not thread-safe); unloaded files are loaded during the export.
         var objects = new List<ObjectRef>();
@@ -517,6 +547,8 @@ public partial class MainWindow : Window
             _ = ShowAudioAsync(node, clip);
         else if (node?.Model is ObjectRef mesh && MeshReader.CanRead(mesh.Info))
             _ = ShowMeshAsync(node, mesh);
+        else if (node?.Model is ObjectRef anim && AnimationClipReader.CanRead(anim.Info))
+            _ = ShowAnimationAsync(node, anim);
         else
             HidePreview();
     }

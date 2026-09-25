@@ -23,11 +23,11 @@ public sealed class AvatarRig
     }
 
     /// <summary>Local transform of a node, converted to right-handed (mirror X).</summary>
-    public double[] LocalMatrix(int node)
+    public double[] LocalMatrix(int node, bool unitScale = false)
     {
         var n = Nodes[node];
         return Mat4.Trs(-n.Position[0], n.Position[1], n.Position[2], n.Rotation[0], -n.Rotation[1], -n.Rotation[2], n.Rotation[3],
-                        n.Scale[0], n.Scale[1], n.Scale[2]);
+                        unitScale ? 1 : n.Scale[0], unitScale ? 1 : n.Scale[1], unitScale ? 1 : n.Scale[2]);
     }
 
     public double[] WorldMatrix(int node)

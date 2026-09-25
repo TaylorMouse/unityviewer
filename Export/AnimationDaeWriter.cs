@@ -22,30 +22,23 @@ public static class AnimationDaeWriter
         public string Id => "rig-" + Sid;
         public List<Node> Children { get; } = new();
         public bool EulerLayout { get; set; }
-        public ClipBinding? Position, Rotation, Scale, Euler;
+        public Ref? Position, Rotation, Scale, Euler;
     }
+
+    /// <summary>A binding with the clip whose curves it indexes (a layered export mixes clips).</summary>
+    private sealed record Ref(ClipData Clip, ClipBinding Binding);
 
     private sealed record Channel(string Target, string Param, List<(double Time, double Value, double In, double Out, bool Step)> Keys);
 
-    /// <summary>
-    /// The transforms a clip plays on, from the scene hierarchy or (for optimised rigs) from an Avatar,
-    /// plus the skinned meshes bound to them.
-    /// </summary>
-    private sealed class Rig
-    {
-        public required Dictionary<long, SceneTransform> Transforms { get; init; }
-        public long Root { get; init; }
-        public required Dictionary<uint, long> Resolved { get; init; }
-        public List<(ObjectInfo MeshObj, long[] Bones)> Skins { get; } = new();
-    }
-
     public static string Write(string path, SerializedFile sf, ObjectInfo clipObj)
     {
-        var clip = AnimationClipReader.Read(sf, clipObj);
-        var bindings = clip.Bindings.Where(b => b.IsTransform && b.Attribute is >= 1 and <= 4).ToList();
+        // A skin clip that is an override layer is combined with its base clip, as the game plays them.
+        var layered = ClipLayering.Resolve(sf, clipObj);
+        var clip = layered.Primary;
+        var bindings = layered.AllTransformBindings.ToList();
         if (bindings.Count == 0) throw new NotSupportedException("This clip does not animate any transforms.");
 
-        var rig = FindSceneRig(sf, bindings) ?? FindAvatarRig(sf, bindings)
+        var rig = ClipRig.Find(sf, bindings)
                   ?? throw new NotSupportedException("No skinned character uses this clip (it animates props, which are not exported yet).");
         var transforms = rig.Transforms;
         long root = rig.Root;
@@ -74,19 +67,21 @@ public static class AnimationDaeWriter
         }
         var tops = include.Where(id => !include.Contains(transforms[id].Parent)).Select(Build).ToList();
 
-        // Attach the clip's curves to their nodes.
-        foreach (var b in bindings)
-        {
-            long id = b.Path == 0 ? root : resolved.GetValueOrDefault(b.Path);
-            if (!nodes.TryGetValue(id, out var node)) continue;
-            switch (b.Attribute)
+        // Attach the curves to their nodes; later layers override earlier ones per property.
+        foreach (var (layerClip, _) in layered.Layers)
+            foreach (var b in layerClip.Bindings.Where(b => b.IsTransform && b.Attribute is >= 1 and <= 4))
             {
-                case ClipBinding.Position: node.Position = b; break;
-                case ClipBinding.Rotation: node.Rotation = b; break;
-                case ClipBinding.Scale: node.Scale = b; break;
-                case ClipBinding.Euler: node.Euler = b; node.EulerLayout = true; break;
+                long id = b.Path == 0 ? root : resolved.GetValueOrDefault(b.Path);
+                if (!nodes.TryGetValue(id, out var node)) continue;
+                var r = new Ref(layerClip, b);
+                switch (b.Attribute)
+                {
+                    case ClipBinding.Position: node.Position = r; break;
+                    case ClipBinding.Scale: node.Scale = r; break;
+                    case ClipBinding.Rotation: node.Rotation = r; node.Euler = null; node.EulerLayout = false; break;
+                    case ClipBinding.Euler: node.Euler = r; node.Rotation = null; node.EulerLayout = true; break;
+                }
             }
-        }
 
         // Skinned meshes (bind poses repaired the same way as the mesh export).
         var meshes = new List<(string Id, MeshData Mesh, string[] SlotSids)>();
@@ -102,7 +97,7 @@ public static class AnimationDaeWriter
         if (meshes.Count == 0) throw new InvalidDataException("The rig's skinned meshes could not be read.");
 
         var channels = new List<Channel>();
-        foreach (var node in nodes.Values) channels.AddRange(BuildChannels(node, clip));
+        foreach (var node in nodes.Values) channels.AddRange(BuildChannels(node));
 
         var sb = new StringBuilder();
         DaeWriter.AppendHeader(sb);
@@ -127,126 +122,35 @@ public static class AnimationDaeWriter
         DaeWriter.AppendFooter(sb);
         File.WriteAllText(path, sb.ToString());
 
-        return $"{clip.Name}: {channels.Count} channels on {nodes.Count} nodes, {meshes.Count} skinned mesh(es)";
-    }
-
-    /// <summary>
-    /// Scene rig: the transform the clip was authored against is the one under which the most path hashes
-    /// resolve, among the ancestors of skinned meshes' bones.
-    /// </summary>
-    private static Rig? FindSceneRig(SerializedFile sf, List<ClipBinding> bindings)
-    {
-        var graph = SceneGraph.For(sf);
-        var hashes = bindings.Select(b => b.Path).Where(h => h != 0).Distinct().ToList();
-        var candidates = new HashSet<long>();
-        foreach (var r in graph.SkinnedRenderers)
-            foreach (var b in r.Bones.Take(1))
-                for (long n = b; graph.Transforms.ContainsKey(n); n = graph.Transforms[n].Parent) candidates.Add(n);
-
-        long best = 0;
-        int bestScore = 0;
-        Dictionary<uint, long> bestMap = new();
-        foreach (var candidate in candidates)
-        {
-            var map = graph.HashesUnder(candidate);
-            int score = hashes.Count(map.ContainsKey);
-            if (score > bestScore)
-            {
-                best = candidate;
-                bestScore = score;
-                bestMap = map;
-            }
-        }
-        if (bestScore == 0) return null;
-
-        var rig = new Rig { Transforms = graph.Transforms, Root = best, Resolved = bestMap };
-        foreach (var r in graph.SkinnedRenderers.Where(r => r.Bones.Length > 0 && r.Bones.All(b => graph.IsUnder(b, best))))
-            if (sf.Objects.FirstOrDefault(o => o.PathId == r.MeshPathId) is { } meshObj)
-                rig.Skins.Add((meshObj, r.Bones));
-        return rig.Skins.Count > 0 ? rig : null;
-    }
-
-    /// <summary>
-    /// Avatar rig, for optimised rigs whose renderers list no bones. The Avatar that matches the file's
-    /// skinned meshes (rest pose closest to their bind pose) is used; clip paths resolve through its m_TOS.
-    /// </summary>
-    private static Rig? FindAvatarRig(SerializedFile sf, List<ClipBinding> bindings)
-    {
-        var graph = SceneGraph.For(sf);
-        var avatars = AvatarRig.ReadAll(sf);
-        if (avatars.Count == 0) return null;
-
-        // Skinned meshes without scene bones (one entry per mesh).
-        var meshes = graph.SkinnedRenderers.Where(r => r.Bones.Length == 0).Select(r => r.MeshPathId).Distinct()
-            .Select(id => sf.Objects.FirstOrDefault(o => o.PathId == id)).Where(o => o != null)
-            .Select(o => (Obj: o!, Mesh: MeshReader.Read(sf, o!))).Where(m => m.Mesh.IsSkinned).ToList();
-        if (meshes.Count == 0) return null;
-
-        var hashes = bindings.Select(b => b.Path).Where(h => h != 0).Distinct().ToList();
-        var best = avatars
-            .Select(a => (Rig: a, Meshes: meshes.Where(m => a.Covers(m.Mesh)).ToList(), Hits: hashes.Count(h => a.NodeOf(h) >= 0)))
-            .Where(x => x.Meshes.Count > 0 && x.Hits > 0)
-            .OrderByDescending(x => x.Meshes.Count)
-            .ThenBy(x => x.Meshes.Min(m => x.Rig.BindSpread(m.Mesh)) < 1e-3 ? 0 : 1)   // the model's own Avatar first
-            .ThenByDescending(x => x.Hits)
-            .FirstOrDefault();
-        if (best.Rig == null) return null;
-
-        // Synthetic transforms (ids 1..n) carrying the Avatar's local rest pose.
-        var avatar = best.Rig;
-        var transforms = new Dictionary<long, SceneTransform>();
-        for (int i = 0; i < avatar.Nodes.Count; i++)
-        {
-            var n = avatar.Nodes[i];
-            transforms[i + 1] = new SceneTransform
-            {
-                Id = i + 1,
-                Name = avatar.NameOf(i),
-                Parent = n.Parent >= 0 && n.Parent < avatar.Nodes.Count ? n.Parent + 1 : 0,
-                Position = n.Position,
-                Rotation = n.Rotation,
-                Scale = n.Scale,
-            };
-        }
-        foreach (var t in transforms.Values)
-            if (transforms.TryGetValue(t.Parent, out var parent)) parent.Children.Add(t.Id);
-
-        var resolved = new Dictionary<uint, long>();
-        for (int i = 0; i < avatar.Nodes.Count; i++) resolved.TryAdd(avatar.Nodes[i].Hash, i + 1);
-
-        long root = transforms.Values.FirstOrDefault(t => !transforms.ContainsKey(t.Parent))?.Id ?? 1;
-        var rig = new Rig { Transforms = transforms, Root = root, Resolved = resolved };
-        foreach (var (obj, mesh) in best.Meshes)
-            rig.Skins.Add((obj, mesh.BoneNameHashes.Select(h => (long)avatar.NodeOf(h) + 1).ToArray()));
-        return rig;
+        return $"{string.Join(" + ", layered.Layers.Select(l => l.Clip.Name))}: {channels.Count} channels on {nodes.Count} nodes, {meshes.Count} skinned mesh(es)";
     }
 
     // ---- Channels ----
 
-    private static IEnumerable<Channel> BuildChannels(Node node, ClipData clip)
+    private static IEnumerable<Channel> BuildChannels(Node node)
     {
         if (node.Position is { } p)
         {
-            yield return Direct($"{node.Id}/location.X", "X", clip.Curves[p.FirstCurve], -1);
-            yield return Direct($"{node.Id}/location.Y", "Y", clip.Curves[p.FirstCurve + 1], 1);
-            yield return Direct($"{node.Id}/location.Z", "Z", clip.Curves[p.FirstCurve + 2], 1);
+            yield return Direct($"{node.Id}/location.X", "X", p.Clip.Curves[p.Binding.FirstCurve], -1);
+            yield return Direct($"{node.Id}/location.Y", "Y", p.Clip.Curves[p.Binding.FirstCurve + 1], 1);
+            yield return Direct($"{node.Id}/location.Z", "Z", p.Clip.Curves[p.Binding.FirstCurve + 2], 1);
         }
         if (node.Scale is { } s)
         {
-            yield return Direct($"{node.Id}/scale.X", "X", clip.Curves[s.FirstCurve], 1);
-            yield return Direct($"{node.Id}/scale.Y", "Y", clip.Curves[s.FirstCurve + 1], 1);
-            yield return Direct($"{node.Id}/scale.Z", "Z", clip.Curves[s.FirstCurve + 2], 1);
+            yield return Direct($"{node.Id}/scale.X", "X", s.Clip.Curves[s.Binding.FirstCurve], 1);
+            yield return Direct($"{node.Id}/scale.Y", "Y", s.Clip.Curves[s.Binding.FirstCurve + 1], 1);
+            yield return Direct($"{node.Id}/scale.Z", "Z", s.Clip.Curves[s.Binding.FirstCurve + 2], 1);
         }
         if (node.Euler is { } e)
         {
             // Unity Euler order is Z, X, Y (R = Ry Rx Rz); mirroring X negates the Y and Z angles.
-            yield return Direct($"{node.Id}/rotationX.ANGLE", "ANGLE", clip.Curves[e.FirstCurve], 1);
-            yield return Direct($"{node.Id}/rotationY.ANGLE", "ANGLE", clip.Curves[e.FirstCurve + 1], -1);
-            yield return Direct($"{node.Id}/rotationZ.ANGLE", "ANGLE", clip.Curves[e.FirstCurve + 2], -1);
+            yield return Direct($"{node.Id}/rotationX.ANGLE", "ANGLE", e.Clip.Curves[e.Binding.FirstCurve], 1);
+            yield return Direct($"{node.Id}/rotationY.ANGLE", "ANGLE", e.Clip.Curves[e.Binding.FirstCurve + 1], -1);
+            yield return Direct($"{node.Id}/rotationZ.ANGLE", "ANGLE", e.Clip.Curves[e.Binding.FirstCurve + 2], -1);
         }
         else if (node.Rotation is { } r)
         {
-            foreach (var c in QuaternionChannels(node, clip, r)) yield return c;
+            foreach (var c in QuaternionChannels(node, r)) yield return c;
         }
     }
 
@@ -258,9 +162,9 @@ public static class AnimationDaeWriter
     /// Quaternion curves to Z/Y/X Euler channels, keyed at the original key times. Tangents are the
     /// one-sided derivatives of the Unity curve at each key, so the shape follows the source closely.
     /// </summary>
-    private static IEnumerable<Channel> QuaternionChannels(Node node, ClipData clip, ClipBinding r)
+    private static IEnumerable<Channel> QuaternionChannels(Node node, Ref r)
     {
-        var q = Enumerable.Range(0, 4).Select(i => clip.Curves[r.FirstCurve + i]).ToArray();
+        var q = Enumerable.Range(0, 4).Select(i => r.Clip.Curves[r.Binding.FirstCurve + i]).ToArray();
         var times = q.SelectMany(c => c.Keys.Select(k => k.Time)).Distinct().OrderBy(x => x).ToList();
         bool Stepped(float time) => q.Any(c => c.Keys.Any(k => k.Time == time && k.Stepped));
 

@@ -23,7 +23,14 @@ public sealed class AnimationCurve
         if (Keys.Count == 0) return 0;
         if (t <= Keys[0].Time) return Keys[0].Value;
         if (t >= Keys[^1].Time) return Keys[^1].Value;
-        int i = Keys.FindLastIndex(k => k.Time <= t);
+        // Binary search for the last key at or before t (curves are evaluated every frame during playback).
+        int lo = 0, hi = Keys.Count - 1;
+        while (lo < hi)
+        {
+            int mid = (lo + hi + 1) / 2;
+            if (Keys[mid].Time <= t) lo = mid; else hi = mid - 1;
+        }
+        int i = lo;
         var a = Keys[i];
         var b = Keys[i + 1];
         if (a.Stepped) return a.Value;

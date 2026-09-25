@@ -27,6 +27,9 @@ public sealed class AppSettings
 
     public bool ExportSound { get; set; } = false;
 
+    /// <summary>Last folder searched by File > Find Dependencies.</summary>
+    public string DependencyFolder { get; set; } = "";
+
     public static void Load()
     {
         try

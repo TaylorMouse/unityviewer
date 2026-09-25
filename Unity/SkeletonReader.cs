@@ -8,6 +8,8 @@ public sealed class SkeletonNode
     public int Parent { get; init; } = -1;
     /// <summary>Local transform relative to the parent, row-major, right-handed.</summary>
     public required double[] Local { get; init; }
+    /// <summary>The same local transform with unit scale (used to rebuild bones scaled to zero).</summary>
+    public double[]? LocalUnscaled { get; init; }
 }
 
 /// <summary>A bone hierarchy plus the mapping from mesh bone slots to hierarchy nodes.</summary>
@@ -75,7 +77,7 @@ public static class SkeletonReader
         {
             int parent = s.Nodes[i].Parent;
             if (bindWorld[i] == null && parent >= 0 && bindWorld[parent] != null)
-                bindWorld[i] = Mat4.Multiply(bindWorld[parent]!, Mat4.RemoveScale(s.Nodes[i].Local));
+                bindWorld[i] = Mat4.Multiply(bindWorld[parent]!, s.Nodes[i].LocalUnscaled ?? Mat4.RemoveScale(s.Nodes[i].Local));
         }
 
         // Replace broken bind poses so they agree with the rebuilt rest pose.
@@ -93,7 +95,7 @@ public static class SkeletonReader
             var local = n.Parent >= 0 && bindWorld[n.Parent] != null
                 ? Mat4.Multiply(Mat4.Invert(bindWorld[n.Parent]!), world)
                 : world;
-            posed.Nodes.Add(new SkeletonNode { Name = n.Name, Sid = n.Sid, Parent = n.Parent, Local = local });
+            posed.Nodes.Add(new SkeletonNode { Name = n.Name, Sid = n.Sid, Parent = n.Parent, Local = local, LocalUnscaled = n.LocalUnscaled });
         }
         return posed;
     }
@@ -135,7 +137,11 @@ public static class SkeletonReader
             var t = graph.Transforms[id];
             string name = t.Name.Length > 0 ? t.Name : $"node_{id}";
             nodeIndex[id] = skeleton.Nodes.Count;
-            skeleton.Nodes.Add(new SkeletonNode { Name = name, Sid = UniqueSid(name, usedSids), Parent = parent, Local = LocalMatrix(t) });
+            skeleton.Nodes.Add(new SkeletonNode
+            {
+                Name = name, Sid = UniqueSid(name, usedSids), Parent = parent,
+                Local = LocalMatrix(t), LocalUnscaled = LocalMatrix(t, unitScale: true),
+            });
             foreach (var k in t.Children.Where(include.Contains)) queue.Enqueue((k, nodeIndex[id]));
         }
 
@@ -183,6 +189,7 @@ public static class SkeletonReader
                 Sid = UniqueSid(rig.NameOf(i), used),
                 Parent = p >= 0 && p < rig.Nodes.Count ? newIndex[p] : -1,
                 Local = rig.LocalMatrix(i),
+                LocalUnscaled = rig.LocalMatrix(i, unitScale: true),
             });
         }
         return skeleton;
@@ -198,10 +205,10 @@ public static class SkeletonReader
     }
 
     /// <summary>Unity local TRS converted to a right-handed matrix (mirror X: position.x and quaternion y/z negate).</summary>
-    private static double[] LocalMatrix(SceneTransform t) =>
+    private static double[] LocalMatrix(SceneTransform t, bool unitScale = false) =>
         Mat4.Trs(-t.Position[0], t.Position[1], t.Position[2],
                  t.Rotation[0], -t.Rotation[1], -t.Rotation[2], t.Rotation[3],
-                 t.Scale[0], t.Scale[1], t.Scale[2]);
+                 unitScale ? 1 : t.Scale[0], unitScale ? 1 : t.Scale[1], unitScale ? 1 : t.Scale[2]);
 
     private static string UniqueSid(string name, HashSet<string> used)
     {

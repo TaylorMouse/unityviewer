@@ -93,6 +93,7 @@ public partial class MainWindow
 
     private void HideMesh()
     {
+        StopAnimation();
         MeshPanel.Visibility = Visibility.Collapsed;
         MeshToolbar.Visibility = Visibility.Collapsed;
         MeshScene.Children.Clear();
@@ -148,6 +149,11 @@ public partial class MainWindow
     private void FrameMesh(MeshData mesh)
     {
         var (min, max) = mesh.Bounds();
+        FrameBounds(min.Select(v => (double)v).ToArray(), max.Select(v => (double)v).ToArray());
+    }
+
+    private void FrameBounds(double[] min, double[] max)
+    {
         _orbitTarget = new Point3D((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
         double dx = max[0] - min[0], dy = max[1] - min[1], dz = max[2] - min[2];
         _orbitRadius = Math.Max(1e-4, Math.Sqrt(dx * dx + dy * dy + dz * dz) / 2);
@@ -184,6 +190,7 @@ public partial class MainWindow
 
     private void MeshPanel_MouseDown(object sender, MouseButtonEventArgs e)
     {
+        if (IsOnAnimationBar(e.OriginalSource)) return;
         if (e.ChangedButton == MouseButton.Left && e.ClickCount == 2)
         {
             ResetOrbit();
@@ -227,6 +234,7 @@ public partial class MainWindow
 
     private void MeshPanel_MouseWheel(object sender, MouseWheelEventArgs e)
     {
+        if (IsOnAnimationBar(e.OriginalSource)) return;
         _orbitDistance = Math.Clamp(_orbitDistance * (e.Delta > 0 ? 0.85 : 1 / 0.85), _orbitRadius * 0.05, _orbitRadius * 200);
         UpdateCamera();
         e.Handled = true;

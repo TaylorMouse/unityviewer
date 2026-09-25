@@ -6,11 +6,74 @@
         AllowDrop="True" Drop="Window_Drop"
         PreviewKeyDown="Window_PreviewKeyDown"
         Closing="Window_Closing">
+    <Window.Resources>
+        <!-- Shared by the Files and Types trees. -->
+        <ContextMenu x:Key="TreeContextMenu" x:Shared="False">
+            <MenuItem Header="Export Selected as _PNG..." InputGestureText="Ctrl+E" Click="ExportPng_Click" />
+            <MenuItem Header="Export Selected as _DDS..." InputGestureText="Ctrl+Shift+E" Click="ExportDds_Click" />
+            <MenuItem Header="Export Selected as _WAV..." InputGestureText="Ctrl+Shift+W" Click="ExportWav_Click" />
+            <MenuItem Header="Export Selected as _OBJ..." Click="ExportObj_Click" />
+            <MenuItem Header="Export Selected as D_AE (COLLADA)..." Click="ExportDae_Click" />
+            <MenuItem Header="Export Selected _Raw..." InputGestureText="Ctrl+Shift+R" Click="ExportRaw_Click" />
+            <Separator />
+            <MenuItem Header="Export _All Known Formats..." InputGestureText="Ctrl+Shift+A" Click="ExportAll_Click" />
+        </ContextMenu>
+        <Style x:Key="BrowserTree" TargetType="TreeView">
+            <Style.Resources>
+                <!-- The export selection is drawn by the item template; hide the built-in single-selection highlight. -->
+                <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="Transparent" />
+                <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="Transparent" />
+                <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="Black" />
+                <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="Black" />
+            </Style.Resources>
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+            <Setter Property="ContextMenu" Value="{StaticResource TreeContextMenu}" />
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="TreeViewItem">
+                        <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                        <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                    </Style>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="ItemTemplate">
+                <Setter.Value>
+                    <HierarchicalDataTemplate DataType="{x:Type local:TreeNode}" ItemsSource="{Binding Children}">
+                        <Border x:Name="RowBorder" Padding="3,1" CornerRadius="2" BorderThickness="1" BorderBrush="Transparent">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Icon}" FontFamily="Segoe MDL2 Assets" FontSize="13"
+                                           Foreground="{Binding IconBrush}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                <TextBlock Text="{Binding Header}" Foreground="{Binding HeaderBrush}" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Detail}" Foreground="Gray" VerticalAlignment="Center" Margin="8,0,0,0" />
+                            </StackPanel>
+                        </Border>
+                        <HierarchicalDataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                <Setter TargetName="RowBorder" Property="BorderBrush" Value="#FF7EB4EA" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsMultiSelected}" Value="True">
+                                <Setter TargetName="RowBorder" Property="Background" Value="#FFCCE4FA" />
+                            </DataTrigger>
+                        </HierarchicalDataTemplate.Triggers>
+                    </HierarchicalDataTemplate>
+                </Setter.Value>
+            </Setter>
+            <EventSetter Event="SelectedItemChanged" Handler="Tree_SelectedItemChanged" />
+            <EventSetter Event="PreviewMouseLeftButtonDown" Handler="Tree_PreviewMouseLeftButtonDown" />
+            <EventSetter Event="PreviewMouseRightButtonDown" Handler="Tree_PreviewMouseRightButtonDown" />
+        </Style>
+    </Window.Resources>
     <DockPanel>
-        <Menu DockPanel.Dock="Top">
+        <Menu DockPanel.Dock="Top" FontSize="14" Padding="4,3">
             <MenuItem Header="_File">
                 <MenuItem Header="Open _File..." InputGestureText="Ctrl+O" Click="OpenFile_Click" />
                 <MenuItem Header="Open F_older..." InputGestureText="Ctrl+Shift+O" Click="OpenFolder_Click" />
+                <MenuItem Header="Find _Dependencies" InputGestureText="Ctrl+D" Click="FindDependencies_Click"
+                          ToolTip="Find and open the bundles the selected file refers to (by their internal CAB names), in the last folder searched" />
+                <MenuItem Header="Find Dependencies _In..." Click="FindDependenciesIn_Click"
+                          ToolTip="Choose the folder to search for the selected file's dependency bundles" />
                 <Separator />
                 <MenuItem Header="_Close All" Click="CloseAll_Click" />
                 <Separator />
@@ -25,11 +88,19 @@
                           Click="ExportWav_Click" />
                 <MenuItem x:Name="ExportObjMenu" Header="Export Selected as _OBJ..." Click="ExportObj_Click" />
                 <MenuItem x:Name="ExportDaeMenu" Header="Export Selected as D_AE (COLLADA)..." Click="ExportDae_Click" />
+                <MenuItem x:Name="ExportRawMenu" Header="Export Selected _Raw..." InputGestureText="Ctrl+Shift+R"
+                          Click="ExportRaw_Click" />
                 <Separator />
                 <MenuItem x:Name="ExportAllMenu" Header="Export _All Known Formats..." InputGestureText="Ctrl+Shift+A"
                           Click="ExportAll_Click" />
                 <Separator />
                 <MenuItem Header="_Preferences..." Click="Preferences_Click" />
+            </MenuItem>
+            <MenuItem x:Name="TypesMenu" Header="_Types">
+                <MenuItem Header="List all _Models" Click="ListModels_Click" />
+                <MenuItem Header="List all _Textures" Click="ListTextures_Click" />
+                <MenuItem Header="List all _Sounds" Click="ListSounds_Click" />
+                <MenuItem Header="List all _Animations" Click="ListAnimations_Click" />
             </MenuItem>
             <MenuItem Header="_View">
                 <MenuItem Header="_Collapse All" Click="CollapseAll_Click" />
@@ -49,57 +120,19 @@
                 <ColumnDefinition Width="*" MinWidth="200" />
             </Grid.ColumnDefinitions>
 
-            <TreeView x:Name="Tree" Grid.Column="0" BorderThickness="0"
-                      VirtualizingPanel.IsVirtualizing="True"
-                      VirtualizingPanel.VirtualizationMode="Recycling"
-                      SelectedItemChanged="Tree_SelectedItemChanged"
-                      PreviewMouseLeftButtonDown="Tree_PreviewMouseLeftButtonDown"
-                      PreviewMouseRightButtonDown="Tree_PreviewMouseRightButtonDown">
-                <TreeView.Resources>
-                    <!-- The export selection is drawn by the item template; hide the built-in single-selection highlight. -->
-                    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="Transparent" />
-                    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="Transparent" />
-                    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="Black" />
-                    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="Black" />
-                </TreeView.Resources>
-                <TreeView.ContextMenu>
-                    <ContextMenu>
-                        <MenuItem Header="Export Selected as _PNG..." InputGestureText="Ctrl+E" Click="ExportPng_Click" />
-                        <MenuItem Header="Export Selected as _DDS..." InputGestureText="Ctrl+Shift+E" Click="ExportDds_Click" />
-                        <MenuItem Header="Export Selected as _WAV..." InputGestureText="Ctrl+Shift+W" Click="ExportWav_Click" />
-                        <MenuItem Header="Export Selected as _OBJ..." Click="ExportObj_Click" />
-                        <MenuItem Header="Export Selected as D_AE (COLLADA)..." Click="ExportDae_Click" />
-                        <Separator />
-                        <MenuItem Header="Export _All Known Formats..." InputGestureText="Ctrl+Shift+A" Click="ExportAll_Click" />
-                    </ContextMenu>
-                </TreeView.ContextMenu>
-                <TreeView.ItemContainerStyle>
-                    <Style TargetType="TreeViewItem">
-                        <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
-                        <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
-                    </Style>
-                </TreeView.ItemContainerStyle>
-                <TreeView.ItemTemplate>
-                    <HierarchicalDataTemplate DataType="{x:Type local:TreeNode}" ItemsSource="{Binding Children}">
-                        <Border x:Name="RowBorder" Padding="3,1" CornerRadius="2" BorderThickness="1" BorderBrush="Transparent">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="{Binding Icon}" FontFamily="Segoe MDL2 Assets" FontSize="13"
-                                           Foreground="{Binding IconBrush}" VerticalAlignment="Center" Margin="0,0,6,0" />
-                                <TextBlock Text="{Binding Header}" Foreground="{Binding HeaderBrush}" VerticalAlignment="Center" />
-                                <TextBlock Text="{Binding Detail}" Foreground="Gray" VerticalAlignment="Center" Margin="8,0,0,0" />
-                            </StackPanel>
-                        </Border>
-                        <HierarchicalDataTemplate.Triggers>
-                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                <Setter TargetName="RowBorder" Property="BorderBrush" Value="#FF7EB4EA" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding IsMultiSelected}" Value="True">
-                                <Setter TargetName="RowBorder" Property="Background" Value="#FFCCE4FA" />
-                            </DataTrigger>
-                        </HierarchicalDataTemplate.Triggers>
-                    </HierarchicalDataTemplate>
-                </TreeView.ItemTemplate>
-            </TreeView>
+            <TabControl x:Name="LeftTabs" Grid.Column="0" Padding="0" BorderThickness="0,1,0,0"
+                        SelectionChanged="LeftTabs_SelectionChanged">
+                <TabItem Header="Files">
+                    <TreeView x:Name="Tree" Style="{StaticResource BrowserTree}" />
+                </TabItem>
+                <TabItem x:Name="TypesTab" Header="Types">
+                    <DockPanel>
+                        <TextBlock x:Name="TypesHeader" DockPanel.Dock="Top" Margin="8,5" Foreground="Gray" TextWrapping="Wrap"
+                                   Text="Use the Types menu to list all models, textures, sounds or animations in the open files." />
+                        <TreeView x:Name="TypesTree" Style="{StaticResource BrowserTree}" />
+                    </DockPanel>
+                </TabItem>
+            </TabControl>
 
             <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" Background="#FFE0E0E0" />
 
@@ -173,9 +206,25 @@
                                     </ModelVisual3D.Content>
                                 </ModelVisual3D>
                             </Viewport3D>
-                            <TextBlock Text="Left-drag: rotate   Right/middle-drag: pan   Wheel: zoom   Double-click: reset"
+                            <TextBlock x:Name="MeshHint" Text="Left-drag: rotate   Right/middle-drag: pan   Wheel: zoom   Double-click: reset"
                                        Foreground="#99FFFFFF" FontSize="11" Margin="10,0,0,8"
                                        HorizontalAlignment="Left" VerticalAlignment="Bottom" IsHitTestVisible="False" />
+
+                            <!-- Playback bar (AnimationClip) -->
+                            <Border x:Name="AnimationBar" VerticalAlignment="Bottom" Background="#CC202328" Padding="10,6"
+                                    Visibility="Collapsed" Cursor="Arrow">
+                                <DockPanel>
+                                    <Button x:Name="AnimPlayButton" DockPanel.Dock="Left" Width="36" Height="28"
+                                            FontFamily="Segoe MDL2 Assets" FontSize="14" Content="&#xE769;"
+                                            Click="AnimPlay_Click" ToolTip="Play / Pause (Space)" />
+                                    <CheckBox x:Name="AnimLoopBox" DockPanel.Dock="Right" Content="Loop" IsChecked="True"
+                                              Foreground="White" VerticalAlignment="Center" Margin="12,0,0,0" />
+                                    <TextBlock x:Name="AnimTimeText" DockPanel.Dock="Right" Foreground="White" FontFamily="Consolas"
+                                               VerticalAlignment="Center" Margin="12,0,0,0" Text="0.00 / 0.00 s" />
+                                    <Slider x:Name="AnimSlider" VerticalAlignment="Center" Margin="12,0,0,0" Minimum="0" Maximum="1"
+                                            IsMoveToPointEnabled="True" ValueChanged="AnimSlider_ValueChanged" />
+                                </DockPanel>
+                            </Border>
                         </Grid>
                     </Border>
 

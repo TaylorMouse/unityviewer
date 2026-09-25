@@ -3,7 +3,7 @@ using UnityBrowser.Unity;
 
 namespace UnityBrowser.Export;
 
-public enum ExportFormat { Png, Dds, Wav, Obj, Dae }
+public enum ExportFormat { Png, Dds, Wav, Obj, Dae, Raw }
 
 public sealed class ExportResult
 {
@@ -40,6 +40,7 @@ public sealed class Exporter
 
     public static bool CanExport(ObjectInfo o, ExportFormat format) => format switch
     {
+        ExportFormat.Raw => true,
         ExportFormat.Wav => AudioClipDecoder.CanDecode(o),
         ExportFormat.Obj => MeshReader.CanRead(o),
         ExportFormat.Dae => MeshReader.CanRead(o) || AnimationClipReader.CanRead(o),
@@ -53,7 +54,11 @@ public sealed class Exporter
         try
         {
             path = UniquePath(o.TypeName, name, o.PathId);
-            if (_format == ExportFormat.Wav)
+            if (_format == ExportFormat.Raw)
+            {
+                RawWriter.WriteObject(path, sf, o);
+            }
+            else if (_format == ExportFormat.Wav)
             {
                 WavWriter.Write(path, AudioClipDecoder.Decode(sf, o));
             }
@@ -117,7 +122,7 @@ public sealed class Exporter
 
         string safe = Sanitise(name);
         if (safe.Length == 0) safe = pathId.ToString();
-        string ext = "." + _format.ToString().ToLowerInvariant();
+        string ext = _format == ExportFormat.Raw ? ".bytes" : "." + _format.ToString().ToLowerInvariant();
 
         // Same name twice in one export (e.g. from different bundles): add the path ID.
         string path = Path.Combine(dir, safe + ext);

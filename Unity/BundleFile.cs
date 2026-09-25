@@ -33,6 +33,43 @@ public sealed class BundleFile
     public static bool IsUnityFS(ReadOnlySpan<byte> file) =>
         file.Length >= 8 && file.Slice(0, 8).SequenceEqual("UnityFS\0"u8);
 
+    /// <summary>
+    /// Reads only a bundle's entry list (header and blocks info), without decompressing its data.
+    /// Returns null when the file is not a UnityFS bundle. Cheap enough to run over thousands of files.
+    /// </summary>
+    public static List<BundleNode>? ReadDirectory(string path)
+    {
+        using var fs = File.OpenRead(path);
+        var head = new byte[Math.Min(fs.Length, 4096)];
+        fs.ReadExactly(head);
+        if (!IsUnityFS(head)) return null;
+
+        var r = new EndianReader(head, bigEndian: true);
+        r.CString(64);
+        uint version = r.U32();
+        r.CString(256);
+        r.CString(256);
+        r.I64();
+        uint compressedSize = r.U32(), uncompressedSize = r.U32(), flags = r.U32();
+        if (version >= 7) r.Align(16);
+
+        long infoPos = (flags & FlagBlocksInfoAtEnd) != 0 ? fs.Length - compressedSize : r.Position;
+        var compressed = new byte[compressedSize];
+        fs.Position = infoPos;
+        fs.ReadExactly(compressed);
+        var info = new byte[uncompressedSize];
+        Compression.Decompress(flags & 0x3Fu, compressed, info);
+
+        var ir = new EndianReader(info, bigEndian: true);
+        ir.Skip(16);
+        int blockCount = ir.I32();
+        ir.Skip(blockCount * 10L);
+        int nodeCount = ir.I32();
+        var nodes = new List<BundleNode>(nodeCount);
+        for (int i = 0; i < nodeCount; i++) nodes.Add(new BundleNode(ir.I64(), ir.I64(), ir.U32(), ir.CString()));
+        return nodes;
+    }
+
     public static BundleFile Load(byte[] file)
     {
         var b = new BundleFile();

@@ -16,7 +16,7 @@ public partial class MainWindow
 
     private void SetExportMenusEnabled(bool enabled) =>
         ExportPngMenu.IsEnabled = ExportDdsMenu.IsEnabled = ExportWavMenu.IsEnabled =
-            ExportObjMenu.IsEnabled = ExportDaeMenu.IsEnabled = ExportAllMenu.IsEnabled = enabled;
+            ExportObjMenu.IsEnabled = ExportDaeMenu.IsEnabled = ExportRawMenu.IsEnabled = ExportAllMenu.IsEnabled = enabled;
 
     /// <summary>The export format for an object under the current preferences, or null to leave it out.</summary>
     private static ExportFormat? FormatFor(ObjectInfo o, AppSettings s) => o.TypeName switch
@@ -45,7 +45,7 @@ public partial class MainWindow
         if (_exporting) return;
         var settings = AppSettings.Current;
         var roots = _selection.Count > 0 ? _selection.ToList()
-            : Tree.SelectedItem is TreeNode focused ? [focused] : new List<TreeNode>();
+            : ActiveTree.SelectedItem is TreeNode focused ? [focused] : new List<TreeNode>();
 
         // Gather per source file on the UI thread. Folder nodes set the base for the mirrored structure.
         var jobs = new Dictionary<string, FileJob>(StringComparer.OrdinalIgnoreCase);
